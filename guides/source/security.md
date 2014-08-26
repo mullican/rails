@@ -5,180 +5,138 @@ This manual describes common security problems in web applications and how to av
 
 After reading this guide, you will know:
 
-* All countermeasures _that are highlighted_.
-* The concept of sessions in Rails, what to put in there and popular attack methods.
-* How just visiting a site can be a security problem (with CSRF).
-* What you have to pay attention to when working with files or providing an administration interface.
-* How to manage users: Logging in and out and attack methods on all layers.
-* And the most popular injection attack methods.
+* Common application security issues and controls provided by Rails to help protect against them.
+* How sessions are implemented in Rails and how to use them safelay.
+* How a user's visit to one site can be used to compromise another.
+* Special considerations when an application works with files.
+* Key concepts for user roles and management.
 
 --------------------------------------------------------------------------------
 
 Introduction
 ------------
 
-Web application frameworks are made to help developers build web applications. Some of them also help you with securing the web application. In fact one framework is not more secure than another: If you use it correctly, you will be able to build secure apps with many frameworks. Ruby on Rails has some clever helper methods, for example against SQL injection, so that this is hardly a problem.
+Web application frameworks are made to help developers build software more easily. The use of a framework does not, by itself, make an application more or less secure; most frameworks can be implemented securely or insecurely. However, a framework can provide tools to help developers create more secure systems, to solve common security problems with well-tested controls, and provide a reliable baseline configuration.
 
-In general there is no such thing as plug-n-play security. Security depends on the people using the framework, and sometimes on the development method. And it depends on all layers of a web application environment: The back-end storage, the web server and the web application itself (and possibly other layers or applications).
+It is important to understand what is meant by "security" in the context of a Web application. Security is not usually a binary proposition - something that is either switched on or off. Rather, developers face a complex, and evolving, set of risks and threats. Some of these risks will be more probable than others, and some will be more damaging than others. The goal of a security system, therefore, is to provide _controls_ that mitigate as much of the risk as possible.
 
-The Gartner Group however estimates that 75% of attacks are at the web application layer, and found out "that out of 300 audited sites, 97% are vulnerable to attack". This is because web applications are relatively easy to attack, as they are simple to understand and manipulate, even by the lay person.
+### Limiting the Attack Surface
 
-The threats against web applications include user account hijacking, bypass of access control, reading or modifying sensitive data, or presenting fraudulent content. Or an attacker might be able to install a Trojan horse program or unsolicited e-mail sending software, aim at financial enrichment or cause brand name damage by modifying company resources. In order to prevent attacks, minimize their impact and remove points of attack, first of all, you have to fully understand the attack methods in order to find the correct countermeasures. That is what this guide aims at.
+One way of reducing risk is to limit the parts of the application that are subject to abuse. This is generally known as the "attack surface." For example, an application which does not use a database would not be vulnerable to SQL injection. An application that accepts no user input is probably less vulnerable to cross-site scripting than one that does. In general, the more complex software becomes, the greater its attack surface will be. 
 
-In order to develop secure web applications you have to keep up to date on all layers and know your enemies. To keep up to date subscribe to security mailing lists, read security blogs and make updating and security checks a habit (check the [Additional Resources](#additional-resources) chapter). It is done manually because that's how you find the nasty logical security problems.
+However, reducing the attack surface does not always mean reducing the feature set. For example, if all the administrative users of a system work in the same physical location, the attack surface could be reduced by limiting administrative actions to known IP addresses. Any vulnerabilities in the underlying application could not then be exploited remotely.
+
+### Defense in Depth
+
+Given that security measures are never absolute, and that attackers can be quite creative, individual controls become much more powerful when they are layered together. Cross-site scripting, for example, is a serious problem discussed in detail below. An important countermeasure for XSS is sanitizing user input to strip out anything that looks like a script. There is always some risk, though, that an attacker will find a way of obscuring the content such that it is not detected by the filter. If, however, the content is also *escaped* on the output side, before it is sent to the browser, the attacker's problem is much harder. The failure of one control does not allow the attack to succeed - he must be able to circumvent both.
+
+This concept extends beyond the application layer. For example, let's assume that a given web application contains at least one vulnerability to cross-site scripting, so that it has a 1/10,000 chance of falling victim to an automated attack that generates a large number of probes. If the attacker is sending those requests to the application itself, he'll succeed within 10,000 attempts. If, however, the application is behind a web application firewall that proxies requests and detects 90% of those attempts, only the remaining 10% will actually reach the application, and the attack is much less likely to be effective.
+
+Just as additional layers outside the application can add security, a vulnerability outside the application can undermine it. It doesn't matter if an application is protected against SQL injection if the database server itself is poorly secured, for example. The remainder of this guide, however, will focus on security considerations specific to the application layer.
+
+Further reading is available in the [Additional Resources](#additional-resources) section.
 
 Sessions
 --------
 
-A good place to start looking at security is with sessions, which can be vulnerable to particular attacks.
+A good place to start looking at security is with sessions, which can be vulnerable to a number of attacks.
 
 ### What are Sessions?
 
-NOTE: _HTTP is a stateless protocol. Sessions make it stateful._
+HTTP is a *stateless* protocol, which means that in terms of the protocol itself, all requests are completely independent of one another. To connect one request to another, like to keep track of the current user, most Web applications use the concept of a session. This simply means that a unique identifier is attached to requests to tie them together, and usually, to connect them with some information about the session's state. This could mean the identity of the current user, the contents of a shopping cart, or anything else that needs to be "remembered" from one request to the next.
 
-Most applications need to keep track of certain state of a particular user. This could be the contents of a shopping basket or the user id of the currently logged in user. Without the idea of sessions, the user would have to identify, and probably authenticate, on every request.
-Rails will create a new session automatically if a new user accesses the application. It will load an existing session if the user has already used the application.
-
-A session usually consists of a hash of values and a session id, usually a 32-character string, to identify the hash. Every cookie sent to the client's browser includes the session id. And the other way round: the browser will send it to the server on every request from the client. In Rails you can save and retrieve values using the session method:
+Rails offers built-in session management. Sessions are enabled by default and accessible to controllers through the `session` hash:
 
 ```ruby
 session[:user_id] = @current_user.id
 User.find(session[:user_id])
 ```
 
-### Session id
+### Session IDs
 
-NOTE: _The session id is a 32 byte long MD5 hash value._
+Sessions are maintained by including an ID with each request, which is usually done with cookies. Considering that one of the major use cases for sessions is keeping track of logged-in users, the security of this ID is very important. It must be absolutely unpredictable and undiscoverable by anyone other than the intended end user. Otherwise, the following attacks are possible:
 
-A session id consists of the hash value of a random string. The random string is the current time, a random number between 0 and 1, the process id number of the Ruby interpreter (also basically a random number) and a constant string. Currently it is not feasible to brute-force Rails' session ids. To date MD5 is uncompromised, but there have been collisions, so it is theoretically possible to create another input text with the same hash value. But this has had no security impact to date.
+- **Session Prediction:** The attacker gains access to another user's session by predicting the value of the ID
+- **Session Fixation:** The attacker is able to induce a particular user to start a session using a specific ID
+- **Session Hijacking:** The attacker is able to discover the session ID assigned to a given user
 
-### Session Hijacking
+In every case, the end result is that the attacker is able to use the session ID with his own requests to impersonate a valid user. From the application's perspective, a user's identity rests entirely in the session ID. Anyone who presents the ID to the application will be treated as that user.
 
-WARNING: _Stealing a user's session id lets an attacker use the web application in the victim's name._
+### Session Prediction
 
-Many web applications have an authentication system: a user provides a user name and password, the web application checks them and stores the corresponding user id in the session hash. From now on, the session is valid. On every request the application will load the user, identified by the user id in the session, without the need for new authentication. The session id in the cookie identifies the session.
+In current versions of Rails, session IDs are generated using Ruby's `SecureRandom` library. In most systems, this should provide adequate protection against prediction. 
 
-Hence, the cookie serves as temporary authentication for the web application. Anyone who seizes a cookie from someone else, may use the web application as this user - with possibly severe consequences. Here are some ways to hijack a session, and their countermeasures:
-
-* Sniff the cookie in an insecure network. A wireless LAN can be an example of such a network. In an unencrypted wireless LAN it is especially easy to listen to the traffic of all connected clients. For the web application builder this means to _provide a secure connection over SSL_. In Rails 3.1 and later, this could be accomplished by always forcing SSL connection in your application config file:
-
-    ```ruby
-    config.force_ssl = true
-    ```
-
-* Most people don't clear out the cookies after working at a public terminal. So if the last user didn't log out of a web application, you would be able to use it as this user. Provide the user with a _log-out button_ in the web application, and _make it prominent_.
-
-* Many cross-site scripting (XSS) exploits aim at obtaining the user's cookie. You'll read [more about XSS](#cross-site-scripting-xss) later.
-
-* Instead of stealing a cookie unknown to the attacker, they fix a user's session identifier (in the cookie) known to them. Read more about this so-called session fixation later.
-
-The main objective of most attackers is to make money. The underground prices for stolen bank login accounts range from $10-$1000 (depending on the available amount of funds), $0.40-$20 for credit card numbers, $1-$8 for online auction site accounts and $4-$30 for email passwords, according to the [Symantec Global Internet Security Threat Report](http://eval.symantec.com/mktginfo/enterprise/white_papers/b-whitepaper_internet_security_threat_report_xiii_04-2008.en-us.pdf).
-
-### Session Guidelines
-
-Here are some general guidelines on sessions.
-
-* _Do not store large objects in a session_. Instead you should store them in the database and save their id in the session. This will eliminate synchronization headaches and it won't fill up your session storage space (depending on what session storage you chose, see below).
-This will also be a good idea, if you modify the structure of an object and old versions of it are still in some user's cookies. With server-side session storages you can clear out the sessions, but with client-side storages, this is hard to mitigate.
-
-* _Critical data should not be stored in session_. If the user clears their cookies or closes the browser, they will be lost. And with a client-side session storage, the user can read the data.
-
-### Session Storage
-
-NOTE: _Rails provides several storage mechanisms for the session hashes. The most important is `ActionDispatch::Session::CookieStore`._
-
-Rails 2 introduced a new default session storage, CookieStore. CookieStore saves the session hash directly in a cookie on the client-side. The server retrieves the session hash from the cookie and eliminates the need for a session id. That will greatly increase the speed of the application, but it is a controversial storage option and you have to think about the security implications of it:
-
-* Cookies imply a strict size limit of 4kB. This is fine as you should not store large amounts of data in a session anyway, as described before. _Storing the current user's database id in a session is usually ok_.
-
-* The client can see everything you store in a session, because it is stored in clear-text (actually Base64-encoded, so not encrypted). So, of course, _you don't want to store any secrets here_. To prevent session hash tampering, a digest is calculated from the session with a server-side secret and inserted into the end of the cookie.
-
-That means the security of this storage depends on this secret (and on the digest algorithm, which defaults to SHA1, for compatibility). So _don't use a trivial secret, i.e. a word from a dictionary, or one which is shorter than 30 characters_.
-
-`secrets.secret_key_base` is used for specifying a key which allows sessions for the application to be verified against a known secure key to prevent tampering. Applications get `secrets.secret_key_base` initialized to a random key present in `config/secrets.yml`, e.g.:
-
-    development:
-      secret_key_base: a75d...
-
-    test:
-      secret_key_base: 492f...
-
-    production:
-      secret_key_base: <%= ENV["SECRET_KEY_BASE"] %>
-
-Older versions of Rails use CookieStore, which uses `secret_token` instead of `secret_key_base` that is used by EncryptedCookieStore. Read the upgrade documentation for more information.
-
-If you have received an application where the secret was exposed (e.g. an application whose source was shared), strongly consider changing the secret.
-
-### Replay Attacks for CookieStore Sessions
-
-TIP: _Another sort of attack you have to be aware of when using `CookieStore` is the replay attack._
-
-It works like this:
-
-* A user receives credits, the amount is stored in a session (which is a bad idea anyway, but we'll do this for demonstration purposes).
-* The user buys something.
-* The new adjusted credit value is stored in the session.
-* The user takes the cookie from the first step (which they previously copied) and replaces the current cookie in the browser.
-* The user has their original credit back.
-
-Including a nonce (a random value) in the session solves replay attacks. A nonce is valid only once, and the server has to keep track of all the valid nonces. It gets even more complicated if you have several application servers (mongrels). Storing nonces in a database table would defeat the entire purpose of CookieStore (avoiding accessing the database).
-
-The best _solution against it is not to store this kind of data in a session, but in the database_. In this case store the credit in the database and the logged_in_user_id in the session.
+WARNING: _Do not attempt to generate session IDs through some other means without a very good reason. They must be cryptographically unpredictable._
 
 ### Session Fixation
 
-NOTE: _Apart from stealing a user's session id, the attacker may fix a session id known to them. This is called session fixation._
-
 ![Session fixation](images/session_fixation.png)
 
-This attack focuses on fixing a user's session id known to the attacker, and forcing the user's browser into using this id. It is therefore not necessary for the attacker to steal the session id afterwards. Here is how this attack works:
+In a session fixation attack, the attacker forces a victim to authenticate using a specific ID that the attacker knows. The following is a typical scenario:
 
-* The attacker creates a valid session id: They load the login page of the web application where they want to fix the session, and take the session id in the cookie from the response (see number 1 and 2 in the image).
-* They maintain the session by accessing the web application periodically in order to keep an expiring session alive.
-* The attacker forces the user's browser into using this session id (see number 3 in the image). As you may not change a cookie of another domain (because of the same origin policy), the attacker has to run a JavaScript from the domain of the target web application. Injecting the JavaScript code into the application by XSS accomplishes this attack. Here is an example: `<script>document.cookie="_session_id=16d5b78abb28e3d6206b60f22a03c8d9";</script>`. Read more about XSS and injection later on.
-* The attacker lures the victim to the infected page with the JavaScript code. By viewing the page, the victim's browser will change the session id to the trap session id.
-* As the new trap session is unused, the web application will require the user to authenticate.
-* From now on, the victim and the attacker will co-use the web application with the same session: The session became valid and the victim didn't notice the attack.
+* The attacker connects to the target application and is assigned a session ID.
+* The victim is a legitimate user of the application.
+* The attacker forces the victim's browser to send this known ID in a cookie when it connects to the target. While this is the most difficult part of the attack, there are a number of scenarios where it is possible. For example:
+    * The target application supports unencrypted connections before login (even if subsequent requests require HTTPS), and the attacker is in a position to manipulate the victim's network traffic.
+    * The login page is vulnerable to cross-site scripting ([discussed in detail below](#cross-site-scripting-xss)). In that case, the attacker might present the user with a link to the target application. Embedded in the link is a small script that writes a cookie with the session ID. When the link is clicked, the script is embedded within the page, and the cookie will be sent with the next request to the application.
+* Because the victim's request included a session ID, the application does not assign a new one.
+* Once the victim authenticates, the attacker can access the target system just as if he were the victim, as long as the session remains active.
 
-### Session Fixation - Countermeasures
+TIP: _Most session fixation attacks can be prevented with a single line of code._
 
-TIP: _One line of code will protect you from session fixation._
-
-The most effective countermeasure is to _issue a new session identifier_ and declare the old one invalid after a successful login. That way, an attacker cannot use the fixed session identifier. This is a good countermeasure against session hijacking, as well. Here is how to create a new session in Rails:
+The most effective countermeasure agains fixation is to _issue a new session identifier_ and invalidate the old one immediately after a successful login. That way, the identifier that the attacker fixed is never associated with an authenticated user. In a Rails controller:
 
 ```ruby
 reset_session
 ```
 
-If you use the popular RestfulAuthentication plugin for user management, add reset_session to the SessionsController#create action. Note that this removes any value from the session, _you have to transfer them to the new session_.
+### Session Hijacking
 
-Another countermeasure is to _save user-specific properties in the session_, verify them every time a request comes in, and deny access, if the information does not match. Such properties could be the remote IP address or the user agent (the web browser name), though the latter is less user-specific. When saving the IP address, you have to bear in mind that there are Internet service providers or large organizations that put their users behind proxies. _These might change over the course of a session_, so these users will not be able to use your application, or only in a limited way.
+WARNING: _Anyone who has a user's session ID is treated as that user._
 
-### Session Expiry
+As described above, the integrity of a user's session rests entirely in the secrecy of the session ID. If that ID can be uncovered by anyone other the intended user, the user's identity is compromised. The following are some common ways that a session might be hijacked:
 
-NOTE: _Sessions that never expire extend the time-frame for attacks such as cross-site request forgery (CSRF), session hijacking and session fixation._
+* A passive observer can easily monitor unencrypted network traffic. An open Wi-Fi network is the simplest place to do so, since the traffic is broadcast over radio waves for a considerable distance. The solution to this problem is to secure all connections with HTTPS.
 
-One possibility is to set the expiry time-stamp of the cookie with the session id. However the client can edit cookies that are stored in the web browser so expiring sessions on the server is safer. Here is an example of how to _expire sessions in a database table_. Call `Session.sweep("20 minutes")` to expire sessions that were used longer than 20 minutes ago.
+    ```ruby
+    config.force_ssl = true
+    ```
+
+* It is common, for applications that support secure connections to also support regular HTTP connections. In this case, a slightly more active attacker could manipulate a user's browser into making plain HTTP requests that would send the same cookie to the target domain, but in plain text. To prevent this type of attack, session cookies should to have the `secure` flag enabled, which instructs the browser to only send them through encrypted connections. This can be done in Rails by setting:
+
+    ```ruby
+    config.action_controller.session_options[:secure] = true
+    ```
+
+* If users do not log out of an application, and sessions are not invalidated by some other means, a stale session could be reused by an attacker. This might happen, for example, if the victim uses a public computer and the attacker harvests cookies from it afterward.
+
+* Many cross-site scripting (XSS) attacks aim at obtaining the user's session cookie. However, these attacks are largely mitigated when cookies have the `HttpOnly` flag set, which instructs the browser to send them only with regular requests and not expose them to JavaScript. In current versions of Rails, this flag is enabled by default for session cookies.
+
+### Session Storage
+
+NOTE: _Rails provides several storage mechanisms for the session hash. From a security perspective, the most important to understand is `ActionDispatch::Session::CookieStore`._
+
+Rails 2 introduced a new default session store named `CookieStore`. `CookieStore` saves the entire session hash, not just an ID, in a cookie. The server reads the session hash straight from the cookie, rather than making a separate lookup from the ID. This is faster and requires less infrastructure to set up. However, there are security considerations:
+
+* Cookies can only hold 4KB of data. This is usually not a problem, as sessions are not meant to hold large objects.
+
+* In earlier versions of Rails, the session data stored in the cookie could be read by the user, even though they were signed to prevent manipulation. This could leak information about the internals of your application. For example, if the session contained a value like `{:is_administrator => false}`, a malicious user would understand how administrative status is determined, and could focus his efforts on finding a way to manipulate that value. Current versions of Rails encrypt the cookie using a configured key.
+
+* The expiration information for cookies remains under a user's control, even when the content of the cookie is encrypted. This means that there is no straightforward way for an application owner to revoke stale sessions. Doing so requires keeping a timestamp within the content of the session hash and re-validating it on each request.
+
+### Session Expiration
+
+NOTE: _The longer a given session stays valid, the greater the window of opportunity for attacks such as cross-site request forgery (CSRF), session hijacking and session fixation._
+
+The specific mechanism to expire stale sessions depends on the storage method, but regularly purging stale sessions is one way to reduce the attack surface for session-related exploits.
+
+For example:
 
 ```ruby
-class Session < ActiveRecord::Base
-  def self.sweep(time = 1.hour)
-    if time.is_a?(String)
-      time = time.split.inject { |count, unit| count.to_i.send(unit) }
-    end
-
-    delete_all "updated_at < '#{time.ago.to_s(:db)}'"
-  end
-end
+ActiveRecord::SessionStore::Session.delete_all(["updated_at < ?", 20.minutes.ago])
 ```
 
-The section about session fixation introduced the problem of maintained sessions. An attacker maintaining a session every five minutes can keep the session alive forever, although you are expiring sessions. A simple solution for this would be to add a created_at column to the sessions table. Now you can delete sessions that were created a long time ago. Use this line in the sweep method above:
-
-```ruby
-delete_all "updated_at < '#{time.ago.to_s(:db)}' OR
-  created_at < '#{2.days.ago.to_s(:db)}'"
-```
+This approach still allows an attacker to keep a session alive by making regular requests to touch the `updated_at` value. To limit that possibility, one might also set a maximum lifetime even for active sessions, based on the value of `created_at`.
 
 Cross-Site Request Forgery (CSRF)
 ---------------------------------
