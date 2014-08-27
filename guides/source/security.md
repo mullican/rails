@@ -192,44 +192,55 @@ As long as the application uses Rails form helpers, the token will be included a
 form_authenticity_token
 ```
 
-A request that fails the authenticity check will cause the session to be reset.
+It is worth noting that if any part of an application is vulnerable to cross-site scripting, it can be leveraged to bypass this mechanism. Anywhere that an attacker is able to execute JavaScript in the context of the targeted application, the script will have access to the entire DOM and can simply collect a valid CSRF token, passing it back to the attacker.
 
-It is worth noting that if any action within an application is vulnerable to cross-site scripting, it can be leveraged to bypass this mechanism. Anywhere that an attacker is able to execute JavaScript in the context of the targeted application, the script has access to the entire DOM and can simply collect a valid CSRF token, passing it back to the attacker.
+Unvalidated Redirection
+-----------------------
 
-Redirection and Files
----------------------
+WARNING: _Unvalidated redirection is an underestimated threat. It does not always sound serious on the surface, but it can be abused in very damaging ways._
 
-Another class of security vulnerabilities surrounds the use of redirection and files in web applications.
+Web applications often need to redirect the user to a new URI after performing some action in the current one. The destination may be within the same domain, or external. In either case, if user input is used to form the URI, it must be carefully sanitized to prevent abuse.
 
-### Redirection
-
-WARNING: _Redirection in a web application is an underestimated cracker tool: Not only can the attacker forward the user to a trap web site, they may also create a self-contained attack._
-
-Whenever the user is allowed to pass (parts of) the URL for redirection, it is possibly vulnerable. The most obvious attack would be to redirect users to a fake web application which looks and feels exactly as the original one. This so-called phishing attack works by sending an unsuspicious link in an email to the users, injecting the link by XSS in the web application or putting the link into an external site. It is unsuspicious, because the link starts with the URL to the web application and the URL to the malicious site is hidden in the redirection parameter: http://www.example.com/site/redirect?to= www.attacker.com. Here is an example of a legacy action:
+Consider the following action. The developer's intent is to catch requests to a deprecated action and redirect them to a new one, while preserving the request parameters.
 
 ```ruby
-def legacy
-  redirect_to(params.update(action:'main'))
+def some_deprecated_action
+  redirect_to(params.update(action: 'main'))
 end
 ```
 
-This will redirect the user to the main action if they tried to access a legacy action. The intention was to preserve the URL parameters to the legacy action and pass them to the main action. However, it can be exploited by attacker if they included a host key in the URL:
+However, an attacker could exploit this behavior by including a `host` key in the query string:
 
 ```
-http://www.example.com/site/legacy?param1=xy&param2=23&host=www.attacker.com
+http://app.example.com/projects/1/some_deprecated_action?host=malicious.example.com
 ```
 
-If it is at the end of the URL it will hardly be noticed and redirects the user to the attacker.com host. A simple countermeasure would be to _include only the expected parameters in a legacy action_ (again a whitelist approach, as opposed to removing unexpected parameters). _And if you redirect to an URL, check it with a whitelist or a regular expression_.
+This will redirect to something like:
 
-#### Self-contained XSS
+```
+http://malicious.example.com/?controller=projects&action=main&id=1
+```
 
-Another redirection and self-contained XSS attack works in Firefox and Opera by the use of the data protocol. This protocol displays its contents directly in the browser and can be anything from HTML or JavaScript to entire images:
+This type of attack could be used in several different ways. The most obvious example is phishing, where the attacker sends an email to the victim which looks legitimate and contains a link. The appearance of legitimacy is the key to making such an attack work. In this case, the link appears to be pointed at a site the user trusts, and it's easy to miss the extra parameter tacked on to the end. Malware delivered through links in phishing emails has been responsible for a number of high-profile security breaches.
+
+There are also situations where an example like the one above might leak sensitive information to the attacker, as any parameters that were meant to be included in the request to the application are now included in the request to the malicious site.
+
+To protect against redirect abuse, follow these guidelines:
+
+1. Avoid using user input to construct URIs whenever possible.
+2. If user input must be used, set each parameter explicitly.
+3. Sanitize input with a regular expression so that only expected characters are permitted.
+
+### Self-contained XSS
+
+A special case of redirection abuse exists with data URIs, which are supported in all modern browsers. A data URI allows the entire content of a resource to be represented as a URI directly, without the typical request/response cycle. While most commonly used with images, data URIs can also encode HTML, which means they can contain JavaScript. If an application redirected to a URI like the following:
 
 `data:text/html;base64,PHNjcmlwdD5hbGVydCgnWFNTJyk8L3NjcmlwdD4K`
 
-This example is a Base64 encoded JavaScript which displays a simple message box. In a redirection URL, an attacker could redirect to this URL with the malicious code in it. As a countermeasure, _do not allow the user to supply (parts of) the URL to be redirected to_.
+The JavaScript (which in this case triggers an alert box) would execute directly, without the attacker needing to host it on a server.
 
-### File Uploads
+Handing Uploaded Files
+----------------------
 
 NOTE: _Make sure file uploads don't overwrite important files, and process media files asynchronously._
 
