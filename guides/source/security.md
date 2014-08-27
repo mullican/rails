@@ -171,23 +171,21 @@ This trivial example demonstrates little more than vandalism, but much more soph
 
 NOTE: _Proper use of HTTP verbs makes attacks more difficult._
 
-The example above only works if the application accepts GET requests for the `destroy` action. Ordinarily, this should not be the case. The HTTP specification supports several verbs, and GET should only be used with requests that don't affect state. Rails RESTful routes will connect the proper verbs to the corresponding actions. When defining individual routes, configure the application to accept only the expected verbs:
+The example above only works if the application accepts GET requests for the `destroy` action. Ordinarily, this should not be the case. The HTTP specification supports several verbs, and GET should only be used with requests that don't affect state. In Rails, resource-oriented routes will connect the proper verbs to the corresponding actions. When defining individual routes, configure the application to accept only the expected verbs:
 
 ```ruby
 match '/project/:id/obliterate', 'projects#destroy', via: :delete
 ```
 
-This makes CSRF attacks more difficult, because it is harder to induce the victim's browser to generate non-GET requests. It is not impossible, however, if the attacker is able to embed JavaScript anywhere that a victim's browser will execute it. For example, a link like the one below is able to create and submit a form once the user clicks it.
+This makes CSRF attacks more difficult, because it is harder to induce the victim's browser to generate non-GET requests. It is not impossible, however, if the attacker is able to embed JavaScript anywhere that a victim's browser will execute it, which could be as simple as sending the victim an email with a link to a page the attacker controls. A script like the following could dynamically submit a form to issue a POST request and change the user's password on the target site. If embedded in an `<iframe>`, the victim will never realize that anything has happened.
 
 ```html
-<a href="javascript:
-  var f = document.createElement('form');
-  f.style.display = 'none';
-  this.parentNode.appendChild(f);
-  f.method = 'POST';
-  f.action = 'http://app.example.com/projects/1/destroy';
-  f.submit();
-  return false;">To the harmless survey</a>
+<form action="http://app.example.com/users/1">
+  <input name="password" value="you-are-compromised">
+</form>
+<script>
+  document.forms[0].submit();
+</script>
 ```
 
 The standard control against CSRF attacks is the use of a cryptographically secure token, bound to the user's session, which must be present in all non-GET requests. The application generates the token automatically and includes it as a hidden field with all forms. Any request which doesn't contain a valid token will be rejected. With a strong mechanism for generating unpredictable tokens, the malicious site will be unable to independently create valid requests.
