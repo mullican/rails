@@ -36,6 +36,18 @@ Just as additional layers outside the application can add security, a vulnerabil
 
 Further reading is available in the [Additional Resources](#additional-resources) section.
 
+### Whitelists and Blacklists
+
+Many of the security controls discussed below require sanitizing user input in one way or another. In other words, before using a piece of information that came from outside the application, we need to make sure that it's not dangerous. We want to know that placing the value in a database query won't change the behavior of that query, or that rendering it in an HTML document won't change the behavior of a web browser, in ways that we don't expect.
+
+Sanitizing usually happens in one of two ways. A "blacklist" approach looks for specific patterns that are known to be dangerous and escapes or removes them. For example, a SQL query sanitizer will escape quotation marks in a value before embedding it into a query. Blacklists are useful when it's not possible to know much about the expected structure of input. A blacklist, however, accepts input as valid unless it's proven to be malicious, and are therefore generally more likely to be circumvented than whitelists.
+  
+A whitelist only accepts input that matches defined characteristics, and rejects anything else as invalid. For example, if a value is expected to be numeric, a whitelist approach would simply reject any non-numeric value, rather than trying to escape it. Where practical, it is generally better to implement a whitelist rather than a blacklist (or both). Examples of whitelisting include:
+
+1. Validating the expected format or length of input (numericality, specific character sets, testing for empty values).
+2. When input follows a known structure like HTML, parsing the document and permitting only specific tags and attributes.
+3. Preprocessing image uploads by resizing or recompressing them, to ensure that they contain valid image data.
+
 Sessions
 --------
 
