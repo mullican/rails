@@ -6,7 +6,7 @@ This manual describes common security problems in web applications and how to av
 After reading this guide, you will know:
 
 * Common application security issues and controls provided by Rails to help protect against them.
-* How sessions are implemented in Rails and how to use them safelay.
+* How sessions are implemented in Rails and how to use them safely.
 * How a user's visit to one site can be used to compromise another.
 * Special considerations when an application works with files.
 * Key concepts for user roles and management.
@@ -28,6 +28,8 @@ However, reducing the attack surface does not always mean reducing the feature s
 
 ### Defense in Depth
 
+NOTE: _Layer security controls so that an attacker must solve many different problems in order to succeed._
+
 Given that security measures are never absolute, and that attackers can be quite creative, individual controls become much more powerful when they are layered together. Cross-site scripting, for example, is a serious problem discussed in detail below. An important countermeasure for XSS is sanitizing user input to strip out anything that looks like a script. There is always some risk, though, that an attacker will find a way of obscuring the content such that it is not detected by the filter. If, however, the content is also *escaped* on the output side, before it is sent to the browser, the attacker's problem is much harder. The failure of one control does not allow the attack to succeed - he must be able to circumvent both.
 
 This concept extends beyond the application layer. For example, let's assume that a given web application contains at least one vulnerability to cross-site scripting, so that it has a 1/10,000 chance of falling victim to an automated attack that generates a large number of probes. If the attacker is sending those requests to the application itself, he'll succeed within 10,000 attempts. If, however, the application is behind a web application firewall that proxies requests and detects 90% of those attempts, only the remaining 10% will actually reach the application, and the attack is much less likely to be effective.
@@ -37,6 +39,8 @@ Just as additional layers outside the application can add security, a vulnerabil
 Further reading is available in the [Additional Resources](#additional-resources) section.
 
 ### Whitelists and Blacklists
+
+NOTE: _Prefer whitelists to blacklists whenever possible._
 
 Many of the security controls discussed below require sanitizing user input in one way or another. In other words, before using a piece of information that came from outside the application, we need to make sure that it's not dangerous. We want to know that placing the value in a database query won't change the behavior of that query, or that rendering it in an HTML document won't change the behavior of a web browser, in ways that we don't expect.
 
@@ -55,7 +59,7 @@ A good place to start looking at security is with sessions, which can be vulnera
 
 ### What are Sessions?
 
-HTTP is a *stateless* protocol, which means that in terms of the protocol itself, all requests are completely independent of one another. To connect one request to another, like to keep track of the current user, most Web applications use the concept of a session. This simply means that a unique identifier is attached to requests to tie them together, and usually, to connect them with some information about the session's state. This could mean the identity of the current user, the contents of a shopping cart, or anything else that needs to be "remembered" from one request to the next.
+HTTP is a *stateless* protocol, which means that in terms of the protocol itself, all requests are completely independent of one another. To connect one request to another, like to keep track of the current user, most Web applications use the concept of a session. This simply means that a unique identifier is attached to requests to tie them together, and usually, to connect them with some information about the state of data. This could mean the identity of the current user, the contents of a shopping cart, or anything else that needs to be "remembered" from one request to the next.
 
 Rails offers built-in session management. Sessions are enabled by default and accessible to controllers through the `session` hash:
 
@@ -66,19 +70,21 @@ User.find(session[:user_id])
 
 ### Session IDs
 
+WARNING: _The integrity of a user's identity depends on the absolute secrecy of session IDs._
+
 Sessions are maintained by including an ID with each request, which is usually done with cookies. Considering that one of the major use cases for sessions is keeping track of logged-in users, the security of this ID is very important. It must be absolutely unpredictable and undiscoverable by anyone other than the intended end user. Otherwise, the following attacks are possible:
 
 - **Session Prediction:** The attacker gains access to another user's session by predicting the value of the ID
-- **Session Fixation:** The attacker is able to induce a particular user to start a session using a specific ID
+- **Session Fixation:** The attacker is able to induce a particular user to authenticate a session using a specific ID
 - **Session Hijacking:** The attacker is able to discover the session ID assigned to a given user
 
 In every case, the end result is that the attacker is able to use the session ID with his own requests to impersonate a valid user. From the application's perspective, a user's identity rests entirely in the session ID. Anyone who presents the ID to the application will be treated as that user.
 
 ### Session Prediction
 
-In current versions of Rails, session IDs are generated using Ruby's `SecureRandom` library. In most systems, this should provide adequate protection against prediction. 
+WARNING: _Do not attempt to generate session IDs except through the built-in methods._
 
-WARNING: _Do not attempt to generate session IDs through some other means without a very good reason. They must be cryptographically unpredictable._
+In current versions of Rails, session IDs are generated using Ruby's `SecureRandom` library. In most systems, this should provide adequate protection against prediction. 
 
 ### Session Fixation
 
@@ -96,7 +102,7 @@ In a session fixation attack, the attacker forces a victim to authenticate using
 
 TIP: _Most session fixation attacks can be prevented with a single line of code._
 
-The most effective countermeasure agains fixation is to _issue a new session identifier_ and invalidate the old one immediately after a successful login. That way, the identifier that the attacker fixed is never associated with an authenticated user. In a Rails controller:
+The most effective countermeasure against fixation is to _issue a new session identifier_ and invalidate the old one immediately after a successful login. That way, the identifier that the attacker fixed is never associated with an authenticated user. In a Rails controller:
 
 ```ruby
 reset_session
@@ -104,7 +110,7 @@ reset_session
 
 ### Session Hijacking
 
-WARNING: _Anyone who has a user's session ID is treated as that user._
+WARNING: _Anyone who has a user's session ID is indistiguishable from the actual user._
 
 As described above, the integrity of a user's session rests entirely in the secrecy of the session ID. If that ID can be uncovered by anyone other the intended user, the user's identity is compromised. The following are some common ways that a session might be hijacked:
 
@@ -124,21 +130,23 @@ As described above, the integrity of a user's session rests entirely in the secr
 
 * Many cross-site scripting (XSS) attacks aim at obtaining the user's session cookie. However, these attacks are largely mitigated when cookies have the `HttpOnly` flag set, which instructs the browser to send them only with regular requests and not expose them to JavaScript. In current versions of Rails, this flag is enabled by default for session cookies.
 
+One possible way to mitigate the risk of session hijacking is to keep track of some user-specific attributes in the session and monitor for changes between requests. If a session that was initiated from an IP address in one country suddenly starts making requests from an IP address in another country, it's unlikely to be the same computer. However, this approach can be difficult to implement in practice due to the risk of false positives. In some network configurations, outbound requests can legitimately originate from multiple IP addresses, for example.
+
 ### Session Storage
 
 NOTE: _Rails provides several storage mechanisms for the session hash. From a security perspective, the most important to understand is `ActionDispatch::Session::CookieStore`._
 
-Rails 2 introduced a new default session store named `CookieStore`. `CookieStore` saves the entire session hash, not just an ID, in a cookie. The server reads the session hash straight from the cookie, rather than making a separate lookup from the ID. This is faster and requires less infrastructure to set up. However, there are security considerations:
+Rails 2 introduced a new session store named `CookieStore`. `CookieStore` saves the entire session hash, not just an ID, in a cookie. The server reads the session hash straight from the cookie, rather than making a separate lookup from the ID. This is faster and requires less infrastructure to set up than other storage methods. However, there are security considerations:
 
 * Cookies can only hold 4KB of data. This is usually not a problem, as sessions are not meant to hold large objects.
 
-* In earlier versions of Rails, the session data stored in the cookie could be read by the user, even though they were signed to prevent manipulation. This could leak information about the internals of your application. For example, if the session contained a value like `{:is_administrator => false}`, a malicious user would understand how administrative status is determined, and could focus his efforts on finding a way to manipulate that value. Current versions of Rails encrypt the cookie using a configured key.
+* In earlier versions of Rails, the session data stored in the cookie could be read by the user, even though the content was signed to prevent manipulation of its contents. As a rule, the session hash should not be used to store sensitive information, but it is often done out of convenience. Beginning with Rails 4, the contents of the cookie are encrypted by default.
 
-* The expiration information for cookies remains under a user's control, even when the content of the cookie is encrypted. This means that there is no straightforward way for an application owner to revoke stale sessions. Doing so requires keeping a timestamp within the content of the session hash and re-validating it on each request.
+* The expiration information for cookies remains under a user's control, even when the content of the cookie is encrypted. This means that there is no straightforward way for an application owner to revoke sessions; a cookie will remain reusable forever if it should be compromised. A countermeasure against such "replay attacks" would be to keep a timestamp within the content of the session hash itself and re-validate it on each request.
 
 ### Session Expiration
 
-NOTE: _The longer a given session stays valid, the greater the window of opportunity for attacks such as cross-site request forgery (CSRF), session hijacking and session fixation._
+WARNING: _The longer a given session stays valid, the greater the window of opportunity for attacks such as cross-site request forgery (CSRF), session hijacking and session fixation._
 
 The specific mechanism to expire stale sessions depends on the storage method, but regularly purging stale sessions is one way to reduce the attack surface for session-related exploits.
 
@@ -169,7 +177,7 @@ This trivial example demonstrates little more than vandalism, but much more soph
 
 ### CSRF Countermeasures
 
-NOTE: _Proper use of HTTP verbs makes attacks more difficult._
+TIP: _Proper use of HTTP verbs makes attacks more difficult._
 
 The example above only works if the application accepts GET requests for the `destroy` action. Ordinarily, this should not be the case. The HTTP specification supports several verbs, and GET should only be used with requests that don't affect state. In Rails, resource-oriented routes will connect the proper verbs to the corresponding actions. When defining individual routes, configure the application to accept only the expected verbs:
 
@@ -177,7 +185,7 @@ The example above only works if the application accepts GET requests for the `de
 match '/project/:id/obliterate', 'projects#destroy', via: :delete
 ```
 
-This makes CSRF attacks more difficult, because it is harder to induce the victim's browser to generate non-GET requests. It is not impossible, however, if the attacker is able to embed JavaScript anywhere that a victim's browser will execute it, which could be as simple as sending the victim an email with a link to a page the attacker controls. A script like the following could dynamically submit a form to issue a POST request and change the user's password on the target site. If embedded in an `<iframe>`, the victim will never realize that anything has happened.
+This makes CSRF attacks harder, because it is more complicated to induce the victim's browser to generate non-GET requests. It is not impossible, however, if the attacker is able to embed JavaScript anywhere that a victim's browser will execute it, which could be as simple as sending the victim an email with a link to a page the attacker controls. A script like the following could dynamically submit a form to issue a POST request and change the user's password on the target site. If embedded in an `<iframe>`, the victim will never realize that anything has happened.
 
 ```html
 <form action="http://app.example.com/users/1">
@@ -190,7 +198,7 @@ This makes CSRF attacks more difficult, because it is harder to induce the victi
 
 The standard control against CSRF attacks is the use of a cryptographically secure token, bound to the user's session, which must be present in all non-GET requests. The application generates the token automatically and includes it as a hidden field with all forms. Any request which doesn't contain a valid token will be rejected. With a strong mechanism for generating unpredictable tokens, the malicious site will be unable to independently create valid requests.
 
-Rails makes this easy with the following, which is enabled by default in `ApplicationController` for new applications:
+Rails makes this easy with the following, which is enabled by default in `ApplicationController`:
 
 ```ruby
 protect_from_forgery
@@ -207,7 +215,7 @@ It is worth noting that if any part of an application is vulnerable to cross-sit
 Unvalidated Redirection
 -----------------------
 
-WARNING: _Unvalidated redirection is an underestimated threat. It does not always sound serious on the surface, but it can be abused in very damaging ways._
+WARNING: _Unvalidated redirection is an underestimated threat. It does not always sound serious on the surface, but it can be abused in serious ways._
 
 Web applications often need to redirect the user to a new URI after performing some action in the current one. The destination may be within the same domain, or external. In either case, if user input is used to form the URI, it must be carefully sanitized to prevent abuse.
 
@@ -252,7 +260,7 @@ The JavaScript (which in this case triggers an alert box) would execute directly
 Filesystem Operations
 ---------------------
 
-NOTE: _The first line of defense in preventing abuse of the server's filesystem is to run the application service itself under a user with minimal privileges. This limits the amount of damage that can be done even when a vulnerability is discovered._
+NOTE: _The first line of defense in preventing abuse of the server's filesystem is to run the application service itself under a user with minimal privileges. This limits the amount of damage that can be done even when a vulnerability is present._
 
 ### Storing Uploaded Files
 
@@ -282,7 +290,7 @@ Just as filenames can be abused when writing data, they can also be manipulated 
 send_file('/var/www/uploads/' + params[:filename])
 ```
 
-Passing "../../../etc/passwd" as the filename will allow the attacker to download the server's user list. Again, this sort of vulnerability is most easily avoided by filtering the input against a character whitelist. Better still is to keep the filename out of the HTTP request entirely; if the request contains only the ID of a database record which contains the actual filename, the system is far less susceptible to manipulation.
+Passing "../../../etc/passwd" as the filename will allow the attacker to download the server's user list. Again, this sort of vulnerability is most easily avoided by filtering the input against a character whitelist. Better still is to keep the filename out of the HTTP request entirely; if the request contains only the ID of a database record, which itself contains the actual filename, the system is far less susceptible to manipulation.
 
 Administrative Interfaces
 -------------------------
