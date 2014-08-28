@@ -249,64 +249,43 @@ A special case of redirection abuse exists with data URIs, which are supported i
 
 The JavaScript (which in this case triggers an alert box) would execute directly, without the attacker needing to host it on a server.
 
-Handing Uploaded Files
-----------------------
+Filesystem Operations
+---------------------
 
-NOTE: _Make sure file uploads don't overwrite important files, and process media files asynchronously._
+NOTE: _The first line of defense in preventing abuse of the server's filesystem is to run the application service itself under a user with minimal privileges. This limits the amount of damage that can be done even when a vulnerability is discovered._
 
-Many web applications allow users to upload files. _File names, which the user may choose (partly), should always be filtered_ as an attacker could use a malicious file name to overwrite any file on the server. If you store file uploads at /var/www/uploads, and the user enters a file name like "../../../etc/passwd", it may overwrite an important file. Of course, the Ruby interpreter would need the appropriate permissions to do so - one more reason to run web servers, database servers and other programs as a less privileged Unix user.
+### Storing Uploaded Files
 
-When filtering user input file names, _don't try to remove malicious parts_. Think of a situation where the web application removes all "../" in a file name and an attacker uses a string such as "....//" - the result will be "../". It is best to use a whitelist approach, which _checks for the validity of a file name with a set of accepted characters_. This is opposed to a blacklist approach which attempts to remove not allowed characters. In case it isn't a valid file name, reject it (or replace not accepted characters), but don't remove them. Here is the file name sanitizer from the [attachment_fu plugin](https://github.com/technoweenie/attachment_fu/tree/master):
+WARNING: _Ensure that file uploads can only be stored in expected locations._
 
-```ruby
-def sanitize_filename(filename)
-  filename.strip.tap do |name|
-    # NOTE: File.basename doesn't work right with Windows paths on Unix
-    # get only the filename, not the whole path
-    name.sub! /\A.*(\\|\/)/, ''
-    # Finally, replace all non alphanumeric, underscore
-    # or periods with underscore
-    name.gsub! /[^\w\.\-]/, '_'
-  end
-end
-```
+Many web applications allow users to upload files. When writing to the server's filesystem, the application should control the filename carefully. Otherwise, an attacker might easily manipulate the name to write the file into an unexpected location. For example, imagine that an application stores uploaded files in `/var/www/uploads`, and the app server runs as the user `railsapp`. If an attacker uploads a file named "../../../home/railsapp/.ssh/authorized_keys" and the application does not modify the value, the attacker could give himself SSH access to the server.
 
-A significant disadvantage of synchronous processing of file uploads (as the attachment_fu plugin may do with images), is its _vulnerability to denial-of-service attacks_. An attacker can synchronously start image file uploads from many computers which increases the server load and may eventually crash or stall the server.
+Rather than sanitizing filenames, the safest approach is to have the application generate them entirely. If user input must be used, however, it is critical to evaluate the names against whitelist and permit only acceptable characters. 
 
-The solution to this is best to _process media files asynchronously_: Save the media file and schedule a processing request in the database. A second process will handle the processing of the file in the background.
+### Executable Code
 
-### Executable Code in File Uploads
+WARNING: _Ensure that file uploads are not treated as executable code._
 
-WARNING: _Source code in uploaded files may be executed when placed in specific directories. Do not place file uploads in Rails' /public directory if it is Apache's home directory._
+Another reason to treat filenames with care is to prevent the server from trying to execute them as code. For example, if an application stores files in `#{Rails.root}/uploads`, an attacker could upload a file named `../app/views/projects/new.html.erb`. When he then navigates to `http://app.example.com/projects/new`, the server will parse the file and execute whatever Ruby code it contains.
 
-The popular Apache web server has an option called DocumentRoot. This is the home directory of the web site, everything in this directory tree will be served by the web server. If there are files with a certain file name extension, the code in it will be executed when requested (might require some options to be set). Examples for this are PHP and CGI files. Now think of a situation where an attacker uploads a file "file.cgi" with code in it, which will be executed when someone downloads the file.
+Or, imagine that the application is served by an instance of Apache which has `mod_php` installed in addition to a Rails application server. If the attacker uploads a file named `self-portrait.jpg.php` and the filename is not changed, the server will execute any code contained in the file when the "image" is requested.
 
-_If your Apache DocumentRoot points to Rails' /public directory, do not put file uploads in it_, store files at least one level downwards.
+Rewriting filenames is not the only way to protect against this type of attack. It's also a good idea to check the content of a file before writing it to the destination. If the expected content is an image, for example, consider resizing or recompressing it and store the result, rather than simply passing a stream of bytes from an untrusted user directly into the folder.
 
 ### File Downloads
 
-NOTE: _Make sure users cannot download arbitrary files._
+WARNING: _Ensure that users cannot download arbitrary files._
 
-Just as you have to filter file names for uploads, you have to do so for downloads. The send_file() method sends files from the server to the client. If you use a file name, that the user entered, without filtering, any file can be downloaded:
+Just as filenames can be abused when writing data, they can also be manipulated to read files outside of expected locations. For example:
 
 ```ruby
 send_file('/var/www/uploads/' + params[:filename])
 ```
 
-Simply pass a file name like "../../../etc/passwd" to download the server's login information. A simple solution against this, is to _check that the requested file is in the expected directory_:
+Passing "../../../etc/passwd" as the filename will allow the attacker to download the server's user list. Again, this sort of vulnerability is most easily avoided by filtering the input against a character whitelist. Better still is to keep the filename out of the HTTP request entirely; if the request contains only the ID of a database record which contains the actual filename, the system is far less susceptible to manipulation.
 
-```ruby
-basename = File.expand_path(File.join(File.dirname(__FILE__), '../../files'))
-filename = File.expand_path(File.join(basename, @file.public_filename))
-raise if basename !=
-     File.expand_path(File.join(File.dirname(filename), '../../../'))
-send_file filename, disposition: 'inline'
-```
-
-Another (additional) approach is to store the file names in the database and name the files on the disk after the ids in the database. This is also a good approach to avoid possible code in an uploaded file to be executed. The attachment_fu plugin does this in a similar way.
-
-Intranet and Admin Security
----------------------------
+Administrative Interfaces
+-------------------------
 
 Intranet and administration interfaces are popular attack targets, because they allow privileged access. Although this would require several extra-security measures, the opposite is the case in the real world.
 
